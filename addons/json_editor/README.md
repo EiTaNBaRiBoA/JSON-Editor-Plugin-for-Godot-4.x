@@ -42,4 +42,4 @@ MIT License - See LICENSE file for details
 
 ## Version
 
-1.0.0
+1.0.0 
