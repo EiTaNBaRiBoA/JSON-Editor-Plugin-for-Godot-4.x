@@ -38,8 +38,8 @@ MIT License - See LICENSE file for details
 
 ## Author
 
-[Your Name/Organization]
+[meishijie]
 
 ## Version
 
-1.0.0 
+1.0.0
