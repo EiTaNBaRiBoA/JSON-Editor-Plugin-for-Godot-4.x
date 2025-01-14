@@ -1,7 +1,7 @@
-class_name JsonManager
+class_name JsonEditorManager
 extends RefCounted
 
-func load_json(path: String) -> Variant:
+static func load_json(path: String) -> Variant:
 	if not FileAccess.file_exists(path):
 		return null
 
@@ -19,7 +19,7 @@ func load_json(path: String) -> Variant:
 
 	return json.get_data()
 
-func save_json(path: String, data: Variant) -> bool:
+static func save_json(path: String, data: Variant) -> bool:
 	var file = FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
 		return false

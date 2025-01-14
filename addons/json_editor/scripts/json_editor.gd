@@ -28,15 +28,14 @@ enum ValueType {
 var current_file_path: String = ""
 var current_data: Variant
 var current_item: TreeItem
-var json_manager = preload("res://addons/json_editor/scripts/json_manager.gd").new()
 
 func _ready() -> void:
 	# Disconnect all possible old connections
 	_disconnect_all_signals()
-	
+
 	# Reconnect all signals
 	_connect_all_signals()
-	
+
 	# Initialize interface
 	_initialize_interface()
 
@@ -337,7 +336,7 @@ func _on_save_pressed() -> void:
 		_show_status("JSON parse error: " + json.get_error_message(), true)
 		return
 
-	if json_manager.save_json(current_file_path, json.get_data()):
+	if JsonEditorManager.save_json(current_file_path, json.get_data()):
 		_show_status("Save successful")
 	else:
 		_show_status("Save failed", true)
@@ -410,7 +409,7 @@ func _on_load_pressed() -> void:
 		_show_status("Please enter a file path", true)
 		return
 
-	var data = json_manager.load_json(path)
+	var data = JsonEditorManager.load_json(path)
 	if data == null:
 		_show_status("Load failed", true)
 		return
