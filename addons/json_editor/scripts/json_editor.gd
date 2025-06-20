@@ -1,6 +1,15 @@
 @tool
 extends Control
 
+# 引入翻译管理器
+const TranslationManager = preload("res://addons/json_editor/scripts/translation_manager.gd")
+
+enum ViewMode {
+	TREE_VIEW,
+	TABLE_VIEW,
+	SPLIT_VIEW
+}
+
 enum ValueType {
 	STRING,
 	NUMBER,
@@ -14,7 +23,11 @@ enum ValueType {
 @onready var json_edit: TextEdit = %JsonEdit
 @onready var status_label: Label = %StatusLabel
 @onready var file_dialog: FileDialog = %FileDialog
+@onready var chinese_button: Button = %ChineseButton
+@onready var english_button: Button = %EnglishButton
 @onready var json_tree: Tree = %JsonTree
+@onready var json_table: Control = %JsonTable
+@onready var view_tabs: TabContainer = %ViewTabs
 @onready var edit_dialog: Window = %EditDialog
 @onready var edit_key: LineEdit = %EditKey
 @onready var edit_value: LineEdit = %EditValue
@@ -28,6 +41,7 @@ enum ValueType {
 var current_file_path: String = ""
 var current_data: Variant
 var current_item: TreeItem
+var current_language: String = "zh"  # 默认中文
 
 func _ready() -> void:
 	# Disconnect all possible old connections
@@ -47,6 +61,12 @@ func _disconnect_all_signals() -> void:
 		%SaveButton.pressed.disconnect(_on_save_pressed)
 	if %BrowseButton.pressed.is_connected(_on_browse_pressed):
 		%BrowseButton.pressed.disconnect(_on_browse_pressed)
+	if %AddRowButton.pressed.is_connected(_on_add_row_pressed):
+		%AddRowButton.pressed.disconnect(_on_add_row_pressed)
+	if chinese_button.pressed.is_connected(_on_chinese_button_pressed):
+		chinese_button.pressed.disconnect(_on_chinese_button_pressed)
+	if english_button.pressed.is_connected(_on_english_button_pressed):
+		english_button.pressed.disconnect(_on_english_button_pressed)
 
 	# File dialog signals
 	if file_dialog.file_selected.is_connected(_on_file_selected):
@@ -85,6 +105,9 @@ func _connect_all_signals() -> void:
 	%LoadButton.pressed.connect(_on_load_pressed)
 	%SaveButton.pressed.connect(_on_save_pressed)
 	%BrowseButton.pressed.connect(_on_browse_pressed)
+	%AddRowButton.pressed.connect(_on_add_row_pressed)
+	chinese_button.pressed.connect(_on_chinese_button_pressed)
+	english_button.pressed.connect(_on_english_button_pressed)
 	file_dialog.file_selected.connect(_on_file_selected)
 
 	# Tree view signals
@@ -105,10 +128,66 @@ func _connect_all_signals() -> void:
 	# Type selection signals
 	type_option.item_selected.connect(_on_type_selected)
 
+func update_translations() -> void:
+	"""更新UI翻译"""
+	# 更新标签页标题
+	if view_tabs:
+		view_tabs.set_tab_title(0, TranslationManager.get_text("tree_view"))
+		view_tabs.set_tab_title(1, TranslationManager.get_text("table_view"))
+
+	# 更新UI标签文本
+	var tree_label = get_node("MarginContainer/VBoxContainer/HSplitContainer/ViewTabs/TreeView/VBoxContainer/Label")
+	if tree_label:
+		tree_label.text = TranslationManager.get_text("tree_view_with_edit")
+
+	var table_label = get_node("MarginContainer/VBoxContainer/HSplitContainer/ViewTabs/TableView/VBoxContainer/HBoxContainer/Label")
+	if table_label:
+		table_label.text = TranslationManager.get_text("excel_style_table_view")
+
+	var add_row_button = %AddRowButton
+	if add_row_button:
+		add_row_button.text = TranslationManager.get_text("add_row")
+
+	# 更新树形视图列标题
+	if json_tree:
+		json_tree.set_column_title(0, TranslationManager.get_text("key"))
+		json_tree.set_column_title(1, TranslationManager.get_text("value"))
+
+	# 更新头部按钮文本
+	var load_button = %LoadButton
+	if load_button:
+		load_button.text = TranslationManager.get_text("load")
+
+	var save_button = %SaveButton
+	if save_button:
+		save_button.text = TranslationManager.get_text("save")
+
+	var browse_button = %BrowseButton
+	if browse_button:
+		browse_button.text = TranslationManager.get_text("browse")
+
+	# 更新其他UI标签
+	var file_path_label = get_node("MarginContainer/VBoxContainer/HeaderBar/Label")
+	if file_path_label:
+		file_path_label.text = TranslationManager.get_text("file_path") + ":"
+
+	var language_label = get_node("MarginContainer/VBoxContainer/HeaderBar/LanguageLabel")
+	if language_label:
+		language_label.text = TranslationManager.get_text("language") + ":"
+
+	var editor_label = get_node("MarginContainer/VBoxContainer/HSplitContainer/EditorPanel/VBoxContainer/Label")
+	if editor_label:
+		editor_label.text = TranslationManager.get_text("json_text") + ":"
+
+	# 更新文件路径输入框占位符
+	var file_path_edit = %FilePathEdit
+	if file_path_edit:
+		file_path_edit.placeholder_text = TranslationManager.get_text("enter_json_file_path")
+
 func _initialize_interface() -> void:
 	# Set tree column titles
-	json_tree.set_column_title(0, "Key")
-	json_tree.set_column_title(1, "Value")
+	json_tree.set_column_title(0, TranslationManager.get_text("key"))
+	json_tree.set_column_title(1, TranslationManager.get_text("value"))
 	json_tree.set_column_expand(0, true)
 	json_tree.set_column_expand(1, true)
 	json_tree.set_column_custom_minimum_width(0, 150)
@@ -137,6 +216,14 @@ func _initialize_interface() -> void:
 	edit_dialog.gui_embed_subwindows = false
 	add_dialog.gui_embed_subwindows = false
 
+	# 设置Tab标签的多语言名称
+	if view_tabs:
+		view_tabs.set_tab_title(0, TranslationManager.get_text("tree_view"))
+		view_tabs.set_tab_title(1, TranslationManager.get_text("table_view"))
+
+	# 初始化语言按钮状态
+	_update_language_button_states()
+
 func _update_tree_view(data: Variant) -> void:
 	json_tree.clear()
 	var root = json_tree.create_item()
@@ -148,6 +235,277 @@ func _update_tree_view(data: Variant) -> void:
 		"key": null
 	})
 	_add_json_to_tree(data, root)
+
+func _update_table_view(data: Variant) -> void:
+	# 确保Excel表格组件已加载
+	if not json_table.has_method("setup_data"):
+		_setup_excel_table()
+
+	if json_table and json_table.has_method("setup_data"):
+		await json_table.setup_data(data)
+
+		# 连接表格数据变化信号
+		if not json_table.is_connected("data_changed", _on_table_data_changed):
+			json_table.data_changed.connect(_on_table_data_changed)
+
+		# 连接列类型编辑信号
+		if not json_table.is_connected("column_type_edit_requested", _on_column_type_edit_requested):
+			json_table.column_type_edit_requested.connect(_on_column_type_edit_requested)
+
+func _setup_excel_table():
+	# 动态加载和设置Excel表格脚本
+	var excel_script = load("res://addons/json_editor/scripts/excel_table.gd")
+	if excel_script and json_table:
+		json_table.set_script(excel_script)
+
+func _on_table_data_changed(new_data: Variant) -> void:
+	current_data = new_data
+	json_edit.text = JSON.stringify(current_data, "\t")
+	# 同步更新树形视图
+	_update_tree_view(current_data)
+	# 显示数据已修改的提示
+	_show_status(TranslationManager.get_text("data_modified_save_reminder"), false)
+
+func _on_add_row_pressed() -> void:
+	# 调用表格组件的添加行方法（在最后添加新行）
+	if json_table and json_table.has_method("_add_row"):
+		var row_count = 0
+		if json_table.has_method("get_row_count"):
+			row_count = json_table.get_row_count()
+		elif json_table.rows_data:
+			row_count = json_table.rows_data.size()
+
+		json_table._add_row(row_count)  # 在末尾添加新行
+		_show_status(TranslationManager.get_text("add_row") + " - " + TranslationManager.get_text("data_modified_save_reminder"), false)
+
+func _on_column_type_edit_requested(column_index: int, column_name: String) -> void:
+	# 显示列类型编辑对话框
+	_show_column_type_dialog(column_index, column_name)
+
+func _show_column_type_dialog(column_index: int, column_name: String) -> void:
+	# 创建列编辑对话框（包含类型和名称编辑）
+	var dialog = AcceptDialog.new()
+	dialog.title = TranslationManager.get_text("edit_column") + ": " + column_name
+	dialog.size = Vector2(450, 380)
+
+	var vbox = VBoxContainer.new()
+	vbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	vbox.add_theme_constant_override("margin_left", 10)
+	vbox.add_theme_constant_override("margin_top", 10)
+	vbox.add_theme_constant_override("margin_right", 10)
+	vbox.add_theme_constant_override("margin_bottom", 10)
+	dialog.add_child(vbox)
+
+	var info_label = Label.new()
+	var current_type_name = TranslationManager.get_text("unknown")
+	if json_table and json_table.has_method("_get_type_icon"):
+		var type_icon = json_table._get_type_icon(column_index)
+		current_type_name = _get_type_name_from_icon(type_icon)
+
+	info_label.text = TranslationManager.get_text("column_index") + ": " + str(column_index) + "\n" + TranslationManager.get_text("current_type") + ": " + current_type_name
+	info_label.add_theme_font_size_override("font_size", 14)
+	vbox.add_child(info_label)
+
+	var separator1 = HSeparator.new()
+	vbox.add_child(separator1)
+
+	# 列名编辑部分
+	var name_label = Label.new()
+	name_label.text = TranslationManager.get_text("column_name") + ":"
+	vbox.add_child(name_label)
+
+	var name_edit = LineEdit.new()
+	name_edit.text = column_name
+	name_edit.placeholder_text = TranslationManager.get_text("enter_new_column_name")
+
+	# 检查是否可以编辑列名
+	var can_edit_name = false
+	if json_table and json_table.has_method("can_edit_column_name"):
+		can_edit_name = json_table.can_edit_column_name(column_index)
+
+	if not can_edit_name:
+		name_edit.editable = false
+		name_edit.tooltip_text = TranslationManager.get_text("cannot_modify_column_name")
+
+	vbox.add_child(name_edit)
+
+	var separator2 = HSeparator.new()
+	vbox.add_child(separator2)
+
+	var type_label = Label.new()
+	type_label.text = TranslationManager.get_text("select_data_type_conversion") + ":"
+	vbox.add_child(type_label)
+
+	var type_option = OptionButton.new()
+	type_option.add_item(TranslationManager.get_text("string_type_full"), 0)
+	type_option.add_item(TranslationManager.get_text("number_type_full"), 1)
+	type_option.add_item(TranslationManager.get_text("boolean_type_full"), 2)
+
+	# 获取当前列的类型并设置为默认选择
+	var current_type = 0
+	if json_table and json_table.has_method("get_column_type"):
+		current_type = json_table.get_column_type(column_index)
+	type_option.select(current_type)
+
+	vbox.add_child(type_option)
+
+	# 预览转换结果
+	var preview_label = Label.new()
+	preview_label.text = TranslationManager.get_text("conversion_preview") + ":"
+	vbox.add_child(preview_label)
+
+	var preview_text = TextEdit.new()
+	preview_text.custom_minimum_size = Vector2(350, 100)
+	preview_text.editable = false
+	preview_text.placeholder_text = TranslationManager.get_text("select_type_to_preview")
+	vbox.add_child(preview_text)
+
+	# 类型选择变化时更新预览
+	type_option.item_selected.connect(_on_type_preview_changed.bind(column_index, type_option, preview_text))
+
+	var hint_label = Label.new()
+	hint_label.text = TranslationManager.get_text("type_conversion_note")
+	hint_label.add_theme_color_override("font_color", Color.ORANGE)
+	hint_label.add_theme_font_size_override("font_size", 12)
+	vbox.add_child(hint_label)
+
+	var button_container = HBoxContainer.new()
+	vbox.add_child(button_container)
+
+	# 应用按钮 - 同时处理名称和类型编辑
+	var apply_button = Button.new()
+	apply_button.text = TranslationManager.get_text("apply_changes")
+	apply_button.pressed.connect(_on_apply_column_changes.bind(column_index, name_edit, type_option, dialog, can_edit_name, false))
+	button_container.add_child(apply_button)
+
+	var force_convert_button = Button.new()
+	force_convert_button.text = TranslationManager.get_text("force_convert")
+	force_convert_button.add_theme_color_override("font_color", Color.RED)
+	force_convert_button.pressed.connect(_on_apply_column_changes.bind(column_index, name_edit, type_option, dialog, can_edit_name, true))
+	button_container.add_child(force_convert_button)
+
+	var cancel_button = Button.new()
+	cancel_button.text = TranslationManager.get_text("cancel")
+	cancel_button.pressed.connect(dialog.queue_free)
+	button_container.add_child(cancel_button)
+
+	# 初始预览
+	_on_type_preview_changed(column_index, type_option, preview_text, current_type)
+
+	add_child(dialog)
+	dialog.popup_centered()
+
+func _on_convert_column_type(column_index: int, type_option: OptionButton, dialog: AcceptDialog, force_convert: bool = false) -> void:
+	var selected_type = type_option.get_selected_id()
+	await _convert_table_column_type(column_index, selected_type, force_convert)
+	dialog.queue_free()
+	_show_status(TranslationManager.get_text("column_type_conversion_complete"), false)
+
+func _on_apply_column_changes(column_index: int, name_edit: LineEdit, type_option: OptionButton, dialog: AcceptDialog, can_edit_name: bool, force_convert: bool = false) -> void:
+	var changes_made = false
+	var error_messages = []
+
+	# 处理列名更改
+	if can_edit_name:
+		var new_name = name_edit.text.strip_edges()
+		var current_name = ""
+		if json_table and json_table.has_method("get_column_name"):
+			current_name = json_table.get_column_name(column_index)
+		else:
+			# 从headers获取当前名称
+			if json_table and json_table.headers and column_index < json_table.headers.size():
+				current_name = json_table.headers[column_index]
+
+		if new_name != current_name:
+			if new_name.is_empty():
+				error_messages.append("列名称不能为空")
+			else:
+				# 尝试重命名列
+				if json_table and json_table.has_method("rename_column"):
+					var rename_success = await json_table.rename_column(column_index, new_name)
+					if rename_success:
+						changes_made = true
+						_show_status("列名已更改为: " + new_name, false)
+					else:
+						error_messages.append("列名称 '" + new_name + "' 已存在或无效")
+				else:
+					error_messages.append("无法重命名列")
+
+	# 处理类型更改
+	var selected_type = type_option.get_selected_id()
+	var current_type = 0
+	if json_table and json_table.has_method("get_column_type"):
+		current_type = json_table.get_column_type(column_index)
+
+	if selected_type != current_type:
+		await _convert_table_column_type(column_index, selected_type, force_convert)
+		changes_made = true
+		var type_names = [TranslationManager.get_text("string_type"), TranslationManager.get_text("number_type"), TranslationManager.get_text("boolean_type")]
+		var type_name = type_names[selected_type] if selected_type < type_names.size() else TranslationManager.get_text("unknown")
+		var convert_mode = TranslationManager.get_text("force_conversion") if force_convert else TranslationManager.get_text("smart_conversion")
+		_show_status(TranslationManager.get_text("column_conversion_status") % [str(column_index), convert_mode, type_name], false)
+
+	# 显示错误信息
+	if not error_messages.is_empty():
+		var error_dialog = AcceptDialog.new()
+		error_dialog.dialog_text = TranslationManager.get_text("operation_failed") + ":\n" + "\n".join(error_messages)
+		error_dialog.title = TranslationManager.get_text("operation_error")
+		add_child(error_dialog)
+		error_dialog.popup_centered()
+		error_dialog.confirmed.connect(func(): error_dialog.queue_free())
+
+		# 如果有错误但也有成功的更改，不关闭对话框
+		if not changes_made:
+			return
+
+	# 关闭对话框
+	dialog.queue_free()
+
+	if changes_made:
+		_show_status(TranslationManager.get_text("column_edit_completed"), false)
+
+func _on_type_preview_changed(column_index: int, type_option: OptionButton, preview_text: TextEdit, selected_index: int = -1) -> void:
+	"""类型选择变化时更新预览"""
+	var target_type = selected_index if selected_index >= 0 else type_option.get_selected_id()
+	var preview_result = _get_conversion_preview(column_index, target_type)
+	preview_text.text = preview_result
+
+func _convert_table_column_type(column_index: int, target_type: int, force_convert: bool = false) -> void:
+	# 调用表格组件的类型转换方法
+	if json_table and json_table.has_method("convert_column_type"):
+		var type_names = [TranslationManager.get_text("string_type"), TranslationManager.get_text("number_type"), TranslationManager.get_text("boolean_type")]
+		var type_name = type_names[target_type] if target_type < type_names.size() else TranslationManager.get_text("unknown")
+		var convert_mode = TranslationManager.get_text("force_conversion") if force_convert else TranslationManager.get_text("smart_conversion")
+
+		print(TranslationManager.get_text("start_conversion") % [convert_mode, str(column_index), "column_" + str(column_index), type_name])
+		await json_table.convert_column_type(column_index, target_type, force_convert)
+		print(TranslationManager.get_text("conversion_complete"))
+
+		# 检查转换后的数据
+		print("转换后的current_data: ", current_data)
+
+		# 显示状态
+		_show_status(TranslationManager.get_text("column_conversion_status") % [str(column_index), convert_mode, type_name], false)
+	else:
+		_show_status(TranslationManager.get_text("table_component_not_ready"), true)
+
+func _get_conversion_preview(column_index: int, target_type: int) -> String:
+	"""获取类型转换预览"""
+	if not json_table or not json_table.has_method("get_column_preview"):
+		return TranslationManager.get_text("cannot_get_preview")
+
+	return json_table.get_column_preview(column_index, target_type)
+
+func _get_type_name_from_icon(type_icon: String) -> String:
+	"""根据类型图标获取类型名称"""
+	if " [T]" in type_icon:
+		return TranslationManager.get_text("type_string")
+	elif " [#]" in type_icon:
+		return TranslationManager.get_text("type_number")
+	elif " [✓]" in type_icon:
+		return TranslationManager.get_text("type_boolean")
+	else:
+		return TranslationManager.get_text("unknown")
 
 func _add_json_to_tree(data: Variant, parent: TreeItem) -> void:
 	match typeof(data):
@@ -419,8 +777,46 @@ func _on_load_pressed() -> void:
 	current_file_path = path
 	_show_status("Load successful")
 	_update_tree_view(data)
+	await _update_table_view(data)
 
 func _on_path_text_submitted(new_text : String = ""):
 	if new_text != "":
 		current_file_path = new_text
 		_on_load_pressed()
+
+func _on_chinese_button_pressed() -> void:
+	"""切换到中文"""
+	_switch_language("zh")
+
+func _on_english_button_pressed() -> void:
+	"""切换到英文"""
+	_switch_language("en")
+
+func _switch_language(language: String) -> void:
+	"""切换语言"""
+	current_language = language
+	TranslationManager.set_language(language)
+
+	# 更新按钮状态
+	_update_language_button_states()
+
+	# 更新界面翻译
+	update_translations()
+
+	# 通知表格组件更新翻译
+	if json_table and json_table.has_method("update_translations"):
+		json_table.update_translations()
+
+func _update_language_button_states() -> void:
+	"""更新语言按钮的状态"""
+	# 设置按钮的活跃状态
+	chinese_button.disabled = (current_language == "zh")
+	english_button.disabled = (current_language == "en")
+
+	# 可以添加视觉反馈，比如改变按钮颜色
+	if current_language == "zh":
+		chinese_button.modulate = Color(0.8, 0.8, 0.8)  # 灰色表示当前选中
+		english_button.modulate = Color.WHITE
+	else:
+		chinese_button.modulate = Color.WHITE
+		english_button.modulate = Color(0.8, 0.8, 0.8)
