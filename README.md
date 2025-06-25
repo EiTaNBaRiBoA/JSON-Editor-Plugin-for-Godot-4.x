@@ -4,7 +4,7 @@ A powerful and user-friendly JSON editor plugin for Godot Engine 4.x that provid
 
 ## ✨ Features
 
-## [2.1.0] - 2024-12-25
+## [2.1.0] - 2025-6-25
 
 ### ✨ Enhanced Floating Window Features
 
