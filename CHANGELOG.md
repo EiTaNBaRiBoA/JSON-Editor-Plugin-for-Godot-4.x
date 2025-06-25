@@ -5,6 +5,23 @@ All notable changes to the JSON Editor plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2024-12-25
+
+### ✨ Enhanced Floating Window Features
+
+- **Double click to expand** cells in floating window
+- **Added row number column display** in popup tables
+- **Added right-click context menu** for row operations
+- **Complete row management** (add before/after, copy, delete)
+
+### 🚀 Real-time Data Synchronization
+
+- **True real-time synchronization** across all views
+- **Bidirectional data sync** (Table ↔ Text ↔ Tree View)
+- **Performance optimization** with throttling mechanism
+- **Floating window operations** sync back to main table
+
+
 ## [2.0.0] - 2024-12-19
 
 ### 🎉 Major Features Added

@@ -4,6 +4,10 @@ class_name ExcelTable
 
 # 引入翻译管理器
 const TranslationManager = preload("res://addons/json_editor/scripts/translation_manager.gd")
+# 引入单元格展开器
+const CellExpander = preload("res://addons/json_editor/scripts/cell_expander.gd")
+# 引入通用展开器
+const UniversalCellExpander = preload("res://addons/json_editor/scripts/universal_cell_expander.gd")
 
 signal data_changed(new_data: Variant)
 signal cell_selected(row: int, column: int)
@@ -14,15 +18,185 @@ signal row_delete_requested(row_index: int)
 
 var grid_container: GridContainer
 var scroll_container: ScrollContainer
+var main_container: VBoxContainer  # 主容器，包含表格和展开区域
+var universal_expander: UniversalCellExpander  # 通用展开器
+var current_expanded_cell: Dictionary = {}  # 当前展开的单元格信息
 var current_data: Variant
 var headers: Array[String] = []
 var rows_data: Array[Array] = []
 var cell_inputs: Array[Array] = []
 var column_types: Array[int] = []  # 存储每列的数据类型 0=String, 1=Number, 2=Boolean
+var cell_expansion_manager: CellExpander.CellExpansionManager  # 单元格展开管理器
+
+# 性能优化：延迟同步机制
+var sync_timer: Timer = null
+var pending_sync: bool = false
+var sync_delay: float = 0.5  # 500ms延迟，避免频繁更新造成卡顿
+var enable_delayed_sync: bool = true  # 是否启用延迟同步（可配置）
+
+# 实时输入同步
+var enable_realtime_sync: bool = true  # 是否启用实时输入同步
+var realtime_sync_delay: float = 0.2   # 实时同步延迟（200ms，比确认同步更快）
 
 func _ready():
 	custom_minimum_size = Vector2(600, 300)
 	_create_ui()
+	# 初始化单元格展开管理器
+	cell_expansion_manager = CellExpander.create_expansion_manager(self)
+
+	# 初始化延迟同步定时器
+	_setup_sync_timer()
+
+func _setup_sync_timer():
+	"""设置延迟同步定时器，优化性能"""
+	sync_timer = Timer.new()
+	sync_timer.wait_time = sync_delay
+	sync_timer.one_shot = true
+	sync_timer.timeout.connect(_perform_delayed_sync)
+	add_child(sync_timer)
+	print(TranslationManager.get_text("delayed_sync_timer_initialized"), ", ", TranslationManager.get_text("sync_delay_set"), ":", sync_delay, TranslationManager.get_text("seconds"))
+
+func _perform_delayed_sync():
+	"""执行延迟同步，避免频繁更新"""
+	if pending_sync:
+		print(TranslationManager.get_text("delayed_sync_executing"))
+		_sync_data_back()
+		pending_sync = false
+		print(TranslationManager.get_text("delayed_sync_completed"))
+
+func _request_sync(immediate: bool = false):
+	"""请求数据同步（支持立即同步和延迟同步）"""
+	if immediate or not enable_delayed_sync:
+		# 立即同步（用于重要操作或禁用延迟同步时）
+		print(TranslationManager.get_text("immediate_sync_executing"))
+		if sync_timer:
+			sync_timer.stop()
+		_sync_data_back()
+		pending_sync = false
+		print(TranslationManager.get_text("immediate_sync_completed"))
+	else:
+		# 延迟同步（用于编辑操作，避免卡顿）
+		if not pending_sync:
+			pending_sync = true
+			print(TranslationManager.get_text("delayed_sync_requested"), ", ", sync_delay, TranslationManager.get_text("seconds"), TranslationManager.get_text("after_execution"))
+
+		# 重启定时器（如果有新的编辑，会重新计时）
+		if sync_timer:
+			sync_timer.stop()
+			sync_timer.start()
+
+func force_sync():
+	"""强制立即同步（公共接口）"""
+	_request_sync(true)
+
+# 性能配置接口
+func set_sync_delay(delay: float):
+	"""设置同步延迟时间（秒）"""
+	sync_delay = delay
+	if sync_timer:
+		sync_timer.wait_time = delay
+	print(TranslationManager.get_text("sync_delay_set"), ":", delay, TranslationManager.get_text("seconds"))
+
+func enable_delayed_sync_mode(enabled: bool):
+	"""启用或禁用延迟同步模式"""
+	enable_delayed_sync = enabled
+	print(TranslationManager.get_text("delayed_sync_mode"), ":", TranslationManager.get_text("realtime_input_sync_enabled") if enabled else TranslationManager.get_text("realtime_input_sync_disabled"))
+
+func get_performance_info() -> Dictionary:
+	"""获取性能相关信息"""
+	return {
+		"sync_delay": sync_delay,
+		"delayed_sync_enabled": enable_delayed_sync,
+		"realtime_sync_enabled": enable_realtime_sync,
+		"realtime_sync_delay": realtime_sync_delay,
+		"pending_sync": pending_sync,
+		"rows_count": rows_data.size(),
+		"total_cells": rows_data.size() * (headers.size() if headers.size() > 0 else 0)
+	}
+
+func _request_realtime_sync(row: int, col: int, text: String):
+	"""请求实时同步（输入过程中的快速更新）"""
+	if not enable_realtime_sync:
+		return
+
+	# 立即更新底层数据（不触发完整同步）
+	if row < rows_data.size() and col < rows_data[row].size():
+		var old_value = rows_data[row][col]
+		rows_data[row][col] = text
+		print(TranslationManager.get_text("realtime_update_data"), ": [", row, ",", col, "] =", text.substr(0, 20) + "...")
+
+		# 只有当值真正改变时才触发同步
+		if old_value != text:
+			# 立即更新current_data以实现真正的实时同步
+			_update_current_data_realtime(row, col, text)
+
+			# 发出实时数据变化信号
+			data_changed.emit(current_data)
+
+			# 使用延迟同步机制作为备份，避免过于频繁的完整同步
+			_request_sync()
+
+func _update_current_data_realtime(row: int, col: int, text: String):
+	"""实时更新current_data，避免等待延迟同步"""
+	if not current_data:
+		return
+
+	match typeof(current_data):
+		TYPE_DICTIONARY:
+			_update_dictionary_realtime(row, col, text)
+		TYPE_ARRAY:
+			_update_array_realtime(row, col, text)
+
+func _update_dictionary_realtime(row: int, col: int, text: String):
+	"""实时更新字典类型的current_data"""
+	if headers.size() > 0 and headers[0] == "ID":
+		# 对象集合模式
+		if row < rows_data.size() and rows_data[row].size() > 0:
+			var item_id = rows_data[row][0]
+			if current_data.has(item_id) and col > 0 and col < headers.size():
+				var column_name = headers[col]
+				var obj = current_data[item_id]
+				if typeof(obj) == TYPE_DICTIONARY:
+					var parsed_value = _parse_value(text)
+					obj[column_name] = parsed_value
+					print(TranslationManager.get_text("realtime_update_object_collection"), ": ", item_id, ".", column_name, " = ", parsed_value)
+	else:
+		# 键值对模式
+		if row < rows_data.size() and rows_data[row].size() >= 2:
+			var key = rows_data[row][0]
+			if col == 1:  # 值列
+				var parsed_value = _parse_value(text)
+				current_data[key] = parsed_value
+				print(TranslationManager.get_text("realtime_update_key_value"), ": ", key, " = ", parsed_value)
+
+func _update_array_realtime(row: int, col: int, text: String):
+	"""实时更新数组类型的current_data"""
+	if headers.size() == 2 and headers[0] == TranslationManager.get_text("index"):
+		# 简单数组模式
+		if col == 1 and row < current_data.size():  # 值列
+			var parsed_value = _parse_value(text)
+			current_data[row] = parsed_value
+			print(TranslationManager.get_text("realtime_update_simple_array"), "[", row, "] = ", parsed_value)
+	else:
+		# 对象数组模式
+		if row < current_data.size() and col < headers.size():
+			var item = current_data[row]
+			if typeof(item) == TYPE_DICTIONARY:
+				var column_name = headers[col]
+				var parsed_value = _parse_value(text)
+				item[column_name] = parsed_value
+				print(TranslationManager.get_text("realtime_update_object_array"), "[", row, "].", column_name, " = ", parsed_value)
+
+# 实时同步配置接口
+func enable_realtime_sync_mode(enabled: bool):
+	"""启用或禁用实时输入同步"""
+	enable_realtime_sync = enabled
+	print(TranslationManager.get_text("realtime_input_sync_enabled") if enabled else TranslationManager.get_text("realtime_input_sync_disabled"))
+
+func set_realtime_sync_delay(delay: float):
+	"""设置实时同步延迟时间"""
+	realtime_sync_delay = delay
+	print(TranslationManager.get_text("realtime_sync_delay_set"), ":", delay, TranslationManager.get_text("seconds"))
 
 func _create_ui():
 	# 设置整体背景样式
@@ -39,18 +213,72 @@ func _create_ui():
 	bg_style.corner_radius_bottom_right = 6
 	add_theme_stylebox_override("panel", bg_style)
 
+	# 创建主容器
+	main_container = VBoxContainer.new()
+	main_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	main_container.add_theme_constant_override("margin_left", 8)
+	main_container.add_theme_constant_override("margin_top", 8)
+	main_container.add_theme_constant_override("margin_right", 8)
+	main_container.add_theme_constant_override("margin_bottom", 8)
+	add_child(main_container)
+
+	# 创建表格滚动容器
 	scroll_container = ScrollContainer.new()
-	scroll_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	scroll_container.add_theme_constant_override("margin_left", 8)
-	scroll_container.add_theme_constant_override("margin_top", 8)
-	scroll_container.add_theme_constant_override("margin_right", 8)
-	scroll_container.add_theme_constant_override("margin_bottom", 8)
-	add_child(scroll_container)
+	scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	main_container.add_child(scroll_container)
 
 	grid_container = GridContainer.new()
 	grid_container.add_theme_constant_override("h_separation", 0)
 	grid_container.add_theme_constant_override("v_separation", 0)
 	scroll_container.add_child(grid_container)
+
+	# 创建展开区域
+	_create_expansion_area()
+
+func _create_expansion_area():
+	"""创建单元格内容展开区域"""
+	# 浮动窗口模式下不需要预创建展开器
+	print(TranslationManager.get_text("floating_window_mode_enabled"))
+
+func _on_expansion_content_updated(new_content: String):
+	"""处理展开器内容更新"""
+	print(TranslationManager.get_text("expansion_content_update_start"))
+	print(TranslationManager.get_text("new_content"), ":", new_content.substr(0, 100) + "...")
+	print(TranslationManager.get_text("current_expanded_cell"), ":", current_expanded_cell)
+
+	if current_expanded_cell.has("source_cell"):
+		var source_cell = current_expanded_cell["source_cell"] as LineEdit
+		print(TranslationManager.get_text("source_cell_validity"), ":", source_cell != null and is_instance_valid(source_cell))
+
+		if source_cell and is_instance_valid(source_cell):
+			print(TranslationManager.get_text("update_before"), " source_cell.text:", source_cell.text)
+			source_cell.text = new_content
+			print(TranslationManager.get_text("update_after"), " source_cell.text:", source_cell.text)
+
+			# 获取单元格位置信息
+			var row = current_expanded_cell.get("row", -1)
+			var col = current_expanded_cell.get("col", -1)
+			print(TranslationManager.get_text("cell_position_row"), row, TranslationManager.get_text("column_text"), col)
+
+			# 直接调用更新函数而不依赖信号
+			if row >= 0 and col >= 0:
+				print(TranslationManager.get_text("direct_call_update_cell"))
+				_update_cell_value(row, col, new_content)
+
+			# 同时也发送信号作为备用
+			source_cell.text_submitted.emit(new_content)
+			print(TranslationManager.get_text("cell_content_updated_signal"))
+		else:
+			print(TranslationManager.get_text("error_source_cell_invalid"))
+	else:
+		print(TranslationManager.get_text("error_no_source_cell"))
+
+	print(TranslationManager.get_text("expansion_content_update_complete"))
+
+func _on_expansion_closed():
+	"""处理展开器关闭"""
+	current_expanded_cell.clear()
+	print(TranslationManager.get_text("expander_closed"))
 
 func setup_data(data: Variant):
 	current_data = data
@@ -426,20 +654,55 @@ func _create_data_cell(value: String, row: int, col: int) -> LineEdit:
 	line_edit.add_theme_color_override("font_color", Color("#333333"))
 	line_edit.add_theme_color_override("font_placeholder_color", Color("#999999"))
 
-	line_edit.text_submitted.connect(_on_cell_text_submitted.bind(row, col))
+	line_edit.text_submitted.connect(func(text: String): _on_cell_text_submitted(text, row, col))
+	line_edit.text_changed.connect(func(text: String): _on_cell_text_changed(text, row, col))
 	line_edit.focus_entered.connect(_on_cell_focus_entered.bind(row, col))
 	line_edit.gui_input.connect(_on_cell_input.bind(row, col, line_edit))
+
+	# 为单元格添加展开提示到tooltip
+	if cell_expansion_manager:
+		cell_expansion_manager.setup_cell_expansion(line_edit, row, col)
 
 	return line_edit
 
 func _on_cell_focus_entered(row: int, col: int):
 	cell_selected.emit(row, col)
 
+func _on_cell_text_changed(text: String, row: int, col: int):
+	"""处理单元格文本实时变化"""
+	if enable_realtime_sync:
+		print(TranslationManager.get_text("realtime_input_detected"), ": 行", row, " 列", col, " 内容:", text.substr(0, 30) + "...")
+		# 使用更短的延迟进行实时同步
+		_request_realtime_sync(row, col, text)
+
 func _on_cell_text_submitted(text: String, row: int, col: int):
+	print("=== _on_cell_text_submitted 被调用 ===")
+	print("参数: text=", text.substr(0, 50) + "...", " row=", row, " col=", col)
 	_update_cell_value(row, col, text)
 	_move_to_next_cell(row, col)
+	print("=== _on_cell_text_submitted 处理完成 ===")
 
 func _on_cell_input(event: InputEvent, row: int, col: int, line_edit: LineEdit):
+	# 处理双击展开功能
+	if event is InputEventMouseButton:
+		var mouse_event = event as InputEventMouseButton
+		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_LEFT:
+			if mouse_event.double_click:
+				print(TranslationManager.get_text("detected_double_click_row"), ":", row, " ", TranslationManager.get_text("column_text"), ":", col)
+				# 检查内容是否适合展开
+				var content = line_edit.text
+				print(TranslationManager.get_text("cell_content_text"), ":", content)
+				print(TranslationManager.get_text("content_length_text"), ":", content.length())
+				if UniversalCellExpander.is_content_expandable(content):
+					print(TranslationManager.get_text("content_suitable_for_expansion"))
+					# 暂时释放焦点，防止编辑模式干扰
+					line_edit.release_focus()
+					_expand_cell_content(row, col, content, line_edit)
+					get_viewport().set_input_as_handled()
+					return
+				else:
+					print(TranslationManager.get_text("content_too_short"))
+
 	if event is InputEventKey and event.pressed:
 		match event.keycode:
 			KEY_TAB:
@@ -455,9 +718,32 @@ func _on_cell_input(event: InputEvent, row: int, col: int, line_edit: LineEdit):
 				get_viewport().set_input_as_handled()
 
 func _update_cell_value(row: int, col: int, value: String):
-	if row < rows_data.size() and col < rows_data[row].size():
-		rows_data[row][col] = value
-		_sync_data_back()
+	print("=== _update_cell_value 被调用 ===")
+	print("参数: row=", row, " col=", col, " value=", value.substr(0, 50) + "...")
+	print("rows_data.size()=", rows_data.size())
+
+	if row < rows_data.size():
+		print("rows_data[", row, "].size()=", rows_data[row].size())
+		if col < rows_data[row].size():
+			print("更新前 rows_data[", row, "][", col, "]=", rows_data[row][col])
+			rows_data[row][col] = value
+			print("更新后 rows_data[", row, "][", col, "]=", rows_data[row][col])
+
+			# 同时更新UI中的单元格显示
+			if row < cell_inputs.size() and col < cell_inputs[row].size():
+				var ui_cell = cell_inputs[row][col]
+				if ui_cell and is_instance_valid(ui_cell):
+					print("同时更新UI单元格显示")
+					ui_cell.text = value
+
+			# 性能优化：使用延迟同步而不是立即同步
+			_request_sync()
+		else:
+			print("错误：列索引超出范围 col=", col, " >= ", rows_data[row].size())
+	else:
+		print("错误：行索引超出范围 row=", row, " >= ", rows_data.size())
+
+	print("=== _update_cell_value 处理完成 ===")
 
 func _sync_data_back():
 	match typeof(current_data):
@@ -879,8 +1165,8 @@ func get_column_preview(column_index: int, target_type: int) -> String:
 						var force_result = str(force_value) + " (" + _get_type_name(typeof(force_value)) + ")"
 
 						var line = "[" + str(i) + "]." + column_name + ": \"" + old_value + "\""
-						line += "\n  智能转换 → " + smart_result
-						line += "\n  强制转换 → " + force_result
+						line += "\n  " + TranslationManager.get_text("smart_conversion_arrow") + smart_result
+						line += "\n  " + TranslationManager.get_text("force_conversion_arrow") + force_result
 						preview_lines.append(line)
 
 	if preview_lines.is_empty():
@@ -1024,6 +1310,10 @@ func _delete_row(row_index: int):
 	dialog.dialog_text = TranslationManager.get_text("confirm_delete_row") % (row_index + 1)
 	dialog.title = TranslationManager.get_text("confirm_delete")
 
+	# 设置按钮文本
+	dialog.ok_button_text = TranslationManager.get_text("confirm")
+	dialog.cancel_button_text = TranslationManager.get_text("cancel")
+
 	get_viewport().add_child(dialog)
 	dialog.confirmed.connect(_confirm_delete_row.bind(row_index))
 	dialog.canceled.connect(func(): dialog.queue_free())
@@ -1136,7 +1426,7 @@ func _delete_row_from_object_collection(row_index: int):
 
 # ===== 键值对模式的行操作 =====
 func _add_row_to_key_value_pairs(row_index: int):
-	print("键值对模式 - 添加行到索引: ", row_index)
+	print(TranslationManager.get_text("key_value_pair_mode"), " - ", TranslationManager.get_text("add_row_to_index"), ": ", row_index)
 
 	var new_key = _generate_unique_key()
 	var new_value = _get_default_value_for_type(column_types[1])
@@ -1156,7 +1446,7 @@ func _add_row_to_key_value_pairs(row_index: int):
 		if i == row_index and not inserted:
 			new_data[new_key] = new_value
 			inserted = true
-			print("在位置 ", i, " 插入新键值对，键: ", new_key)
+			print(TranslationManager.get_text("insert_new_key_value_pair"), " ", i, ", ", TranslationManager.get_text("key"), ": ", new_key)
 
 		var key = current_row_keys[i]
 		new_data[key] = current_data[key]
@@ -1164,7 +1454,7 @@ func _add_row_to_key_value_pairs(row_index: int):
 	# 如果还没有插入，则添加到末尾
 	if not inserted:
 		new_data[new_key] = new_value
-		print("在末尾添加新键值对，键: ", new_key)
+		print(TranslationManager.get_text("add_at_end"), ", ", TranslationManager.get_text("key"), ": ", new_key)
 
 	# 更新数据
 	current_data = new_data
@@ -1175,7 +1465,7 @@ func _add_row_to_key_value_pairs(row_index: int):
 	data_changed.emit(current_data)
 
 func _copy_row_in_key_value_pairs(row_index: int, row_to_copy: Array):
-	print("键值对模式 - 复制行索引: ", row_index)
+	print(TranslationManager.get_text("key_value_pair_mode"), " - ", TranslationManager.get_text("copy_key_value_pair"), ": ", row_index)
 
 	if row_to_copy.size() < 2:
 		print("错误：要复制的行数据不完整")
@@ -1193,7 +1483,7 @@ func _copy_row_in_key_value_pairs(row_index: int, row_to_copy: Array):
 	data_changed.emit(current_data)
 
 func _delete_row_from_key_value_pairs(row_index: int):
-	print("键值对模式 - 删除行索引: ", row_index)
+	print(TranslationManager.get_text("key_value_pair_mode"), " - ", TranslationManager.get_text("delete_key_value_pair"), ": ", row_index)
 
 	if row_index >= rows_data.size():
 		print("错误：行索引超出范围: ", row_index, "/", rows_data.size())
@@ -1215,10 +1505,10 @@ func _add_row_to_simple_array(row_index: int):
 
 	if row_index >= current_data.size():
 		current_data.append(new_value)
-		print("已在数组末尾添加新值: ", new_value)
+		print(TranslationManager.get_text("add_new_value_to_array"), ": ", new_value)
 	else:
 		current_data.insert(row_index, new_value)
-		print("已在索引 ", row_index, " 插入新值: ", new_value)
+		print(TranslationManager.get_text("insert_new_value_at_index"), " ", row_index, ": ", new_value)
 
 	# 重建表格
 	await setup_data(current_data)
@@ -1237,7 +1527,7 @@ func _copy_row_in_simple_array(row_index: int, row_to_copy: Array):
 
 	var value_to_copy = current_data[row_index]
 	current_data.insert(row_index + 1, value_to_copy)
-	print("已复制数组元素，索引 ", row_index, " 的值 ", value_to_copy, " 到索引 ", row_index + 1)
+	print(TranslationManager.get_text("copy_array_element"), ", ", TranslationManager.get_text("index"), " ", row_index, " ", TranslationManager.get_text("value"), " ", value_to_copy, " ", TranslationManager.get_text("to_index"), " ", row_index + 1)
 
 	# 重建表格
 	await setup_data(current_data)
@@ -1252,7 +1542,7 @@ func _delete_row_from_simple_array(row_index: int):
 
 	var deleted_value = current_data[row_index]
 	current_data.remove_at(row_index)
-	print("已删除数组元素，索引 ", row_index, " 的值: ", deleted_value)
+	print(TranslationManager.get_text("delete_array_element"), ", ", TranslationManager.get_text("index"), " ", row_index, " ", TranslationManager.get_text("value"), ": ", deleted_value)
 
 	# 重建表格
 	await setup_data(current_data)
@@ -1336,13 +1626,13 @@ func _generate_unique_key() -> String:
 func _get_default_value_for_type(type_id: int) -> Variant:
 	match type_id:
 		0: # String
-			return "新值"
+			return TranslationManager.get_text("new_value_default")
 		1: # Number
 			return 0
 		2: # Boolean
 			return false
 		_:
-			return "新值"
+			return TranslationManager.get_text("new_value_default")
 
 # ===== 列标题编辑辅助函数 =====
 func can_edit_column_name(column_index: int) -> bool:
@@ -1408,3 +1698,111 @@ func _update_data_column_names(old_name: String, new_name: String):
 					var value = item[old_name]
 					item.erase(old_name)
 					item[new_name] = value
+
+# 简单的单元格展开对话框
+func _show_simple_expansion_dialog(row: int, col: int, content: String, source_cell: LineEdit):
+	print("创建简单展开对话框")
+
+	# 创建对话框
+	var dialog = ConfirmationDialog.new()
+	dialog.title = TranslationManager.get_text("cell_content_viewer") % [row + 1, col + 1]
+	dialog.size = Vector2(600, 400)
+
+	# 创建文本编辑区域
+	var text_edit = TextEdit.new()
+	text_edit.text = content
+	text_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	text_edit.size_flags_vertical = Control.SIZE_EXPAND_FILL
+
+	# 添加到对话框
+	dialog.add_child(text_edit)
+
+	# 设置按钮文本
+	dialog.ok_button_text = TranslationManager.get_text("confirm")
+	dialog.cancel_button_text = TranslationManager.get_text("cancel")
+
+	# 连接信号
+	dialog.confirmed.connect(func():
+		print("用户确认，更新单元格内容")
+		source_cell.text = text_edit.text
+		source_cell.text_submitted.emit(text_edit.text)
+		dialog.queue_free()
+	)
+
+	dialog.canceled.connect(func():
+		print("用户取消")
+		dialog.queue_free()
+	)
+
+	# 添加到场景并显示
+	get_viewport().add_child(dialog)
+	dialog.popup_centered()
+
+	print("简单展开对话框已显示")
+
+# 展开区域相关函数
+func _setup_expansion_button_styles(cancel_button: Button, confirm_button: Button):
+	"""设置展开区域按钮样式"""
+	# 取消按钮样式
+	var cancel_normal = StyleBoxFlat.new()
+	cancel_normal.bg_color = Color("#F3F4F6")
+	cancel_normal.border_width_left = 1
+	cancel_normal.border_width_top = 1
+	cancel_normal.border_width_right = 1
+	cancel_normal.border_width_bottom = 1
+	cancel_normal.border_color = Color("#D1D5DB")
+	cancel_normal.corner_radius_top_left = 4
+	cancel_normal.corner_radius_top_right = 4
+	cancel_normal.corner_radius_bottom_left = 4
+	cancel_normal.corner_radius_bottom_right = 4
+	cancel_button.add_theme_stylebox_override("normal", cancel_normal)
+	cancel_button.add_theme_color_override("font_color", Color("#374151"))
+
+	# 确认按钮样式
+	var confirm_normal = StyleBoxFlat.new()
+	confirm_normal.bg_color = Color("#4A90E2")
+	confirm_normal.border_width_left = 1
+	confirm_normal.border_width_top = 1
+	confirm_normal.border_width_right = 1
+	confirm_normal.border_width_bottom = 1
+	confirm_normal.border_color = Color("#3B82F6")
+	confirm_normal.corner_radius_top_left = 4
+	confirm_normal.corner_radius_top_right = 4
+	confirm_normal.corner_radius_bottom_left = 4
+	confirm_normal.corner_radius_bottom_right = 4
+	confirm_button.add_theme_stylebox_override("normal", confirm_normal)
+	confirm_button.add_theme_color_override("font_color", Color.WHITE)
+
+func _expand_cell_content(row: int, col: int, content: String, source_cell: LineEdit):
+	"""展开单元格内容到浮动窗口"""
+	print(TranslationManager.get_text("expand_cell_content_floating"), ":", row, " ", TranslationManager.get_text("column_text"), ":", col)
+
+	# 保存当前展开的单元格信息
+	current_expanded_cell = {
+		"row": row,
+		"col": col,
+		"source_cell": source_cell,
+		"original_content": content
+	}
+
+	# 创建浮动展开器窗口
+	universal_expander = UniversalCellExpander.new()
+	get_tree().root.add_child(universal_expander)
+
+	# 连接信号
+	universal_expander.content_updated.connect(_on_expansion_content_updated)
+	universal_expander.expansion_closed.connect(_on_expansion_closed)
+
+	# 设置展开信息
+	var cell_info = {
+		"title": TranslationManager.get_text("cell_content_title") % [row + 1, col + 1, headers[col] if col < headers.size() else ""]
+	}
+
+	# 设置窗口标题
+	universal_expander.title = TranslationManager.get_text("cell_expansion_title") % [row + 1, col + 1]
+
+	# 设置展开内容并显示
+	universal_expander.setup_expansion(content, cell_info, 0)
+	universal_expander.show_expansion()
+
+# 旧的展开函数已被通用展开器替代

@@ -1,8 +1,24 @@
-# JSON Editor Plugin for Godot 4.x
+# JSON Editor Plugin 2.0 for Godot 4.x
 
 A powerful and user-friendly JSON editor plugin for Godot Engine 4.x that provides a comprehensive visual interface for editing JSON files with multi-language support and Excel-style table functionality.
 
 ## ✨ Features
+
+## [2.1.0] - 2024-12-25
+
+### ✨ Enhanced Floating Window Features
+
+- **Double click to expand** cells in floating window
+- **Added row number column display** in popup tables
+- **Added right-click context menu** for row operations
+- **Complete row management** (add before/after, copy, delete)
+
+### 🚀 Real-time Data Synchronization
+
+- **True real-time synchronization** across all views
+- **Bidirectional data sync** (Table ↔ Text ↔ Tree View)
+- **Performance optimization** with throttling mechanism
+- **Floating window operations** sync back to main table
 
 ### Core Functionality
 

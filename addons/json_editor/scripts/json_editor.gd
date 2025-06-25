@@ -43,6 +43,11 @@ var current_data: Variant
 var current_item: TreeItem
 var current_language: String = "zh"  # 默认中文
 
+# 实时更新节流机制
+var realtime_update_timer: Timer = null
+var pending_realtime_update: bool = false
+var realtime_update_delay: float = 0.1  # 100ms延迟，平衡响应性和性能
+
 func _ready() -> void:
 	# Disconnect all possible old connections
 	_disconnect_all_signals()
@@ -52,6 +57,9 @@ func _ready() -> void:
 
 	# Initialize interface
 	_initialize_interface()
+
+	# 初始化实时更新定时器
+	_setup_realtime_update_timer()
 
 func _disconnect_all_signals() -> void:
 	# Button signals
@@ -258,11 +266,42 @@ func _setup_excel_table():
 	if excel_script and json_table:
 		json_table.set_script(excel_script)
 
+func _setup_realtime_update_timer():
+	"""设置实时更新定时器，优化性能"""
+	realtime_update_timer = Timer.new()
+	realtime_update_timer.wait_time = realtime_update_delay
+	realtime_update_timer.one_shot = true
+	realtime_update_timer.timeout.connect(_perform_realtime_update)
+	add_child(realtime_update_timer)
+	print("实时更新定时器已初始化，延迟:", realtime_update_delay, "秒")
+
+func _perform_realtime_update():
+	"""执行实时更新，避免频繁更新"""
+	if pending_realtime_update:
+		print("执行实时更新")
+		json_edit.text = JSON.stringify(current_data, "\t")
+		# 同步更新树形视图
+		_update_tree_view(current_data)
+		pending_realtime_update = false
+		print("实时更新完成")
+
+func _request_realtime_update():
+	"""请求实时更新（使用节流机制）"""
+	if not pending_realtime_update:
+		pending_realtime_update = true
+		print("实时更新已请求")
+
+	# 重启定时器（如果有新的更新，会重新计时）
+	if realtime_update_timer:
+		realtime_update_timer.stop()
+		realtime_update_timer.start()
+
 func _on_table_data_changed(new_data: Variant) -> void:
 	current_data = new_data
-	json_edit.text = JSON.stringify(current_data, "\t")
-	# 同步更新树形视图
-	_update_tree_view(current_data)
+
+	# 使用节流机制进行实时更新
+	_request_realtime_update()
+
 	# 显示数据已修改的提示
 	_show_status(TranslationManager.get_text("data_modified_save_reminder"), false)
 
@@ -287,6 +326,9 @@ func _show_column_type_dialog(column_index: int, column_name: String) -> void:
 	var dialog = AcceptDialog.new()
 	dialog.title = TranslationManager.get_text("edit_column") + ": " + column_name
 	dialog.size = Vector2(450, 380)
+
+	# 设置按钮文本
+	dialog.ok_button_text = TranslationManager.get_text("confirm")
 
 	var vbox = VBoxContainer.new()
 	vbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -450,6 +492,10 @@ func _on_apply_column_changes(column_index: int, name_edit: LineEdit, type_optio
 		var error_dialog = AcceptDialog.new()
 		error_dialog.dialog_text = TranslationManager.get_text("operation_failed") + ":\n" + "\n".join(error_messages)
 		error_dialog.title = TranslationManager.get_text("operation_error")
+
+		# 设置按钮文本
+		error_dialog.ok_button_text = TranslationManager.get_text("confirm")
+
 		add_child(error_dialog)
 		error_dialog.popup_centered()
 		error_dialog.confirmed.connect(func(): error_dialog.queue_free())
@@ -806,6 +852,8 @@ func _switch_language(language: String) -> void:
 	# 通知表格组件更新翻译
 	if json_table and json_table.has_method("update_translations"):
 		json_table.update_translations()
+
+	print("语言切换完成，新语言:", language)
 
 func _update_language_button_states() -> void:
 	"""更新语言按钮的状态"""
