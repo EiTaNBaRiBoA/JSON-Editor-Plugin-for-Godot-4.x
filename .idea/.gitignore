@@ -1,0 +1,29 @@
+# 默认忽略的文件
+/shelf/
+/workspace.xml
+# Rider 忽略的文件
+/contentModel.xml
+/projectSettingsUpdater.xml
+/.idea.JSON-Editor-Plugin-for-Godot-4.x.iml
+/modules.xml
+# 基于编辑器的 HTTP 客户端请求
+/httpRequests/
+# Datasource local storage ignored files
+/dataSources/
+/dataSources.local.xml
+
+# JetBrains IDE
+.idea/
+
+# Godot-specific ignores
+.godot/
+*.translation
+export_presets.cfg
+
+# Imported translations (automatically generated from CSV files)
+*.translation
+
+# Mono-specific ignores
+.mono/
+data_*/
+mono_crash.*.json
